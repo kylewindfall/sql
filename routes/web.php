@@ -1,15 +1,12 @@
 <?php
 
+use App\Http\Controllers\DatabaseExportController;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
-Route::get('/', function () {
-    return view('welcome');
-})->name('home');
-
-Route::view('dashboard', 'dashboard')
-    ->middleware(['auth', 'verified'])
-    ->name('dashboard');
+Volt::route('/', 'dashboard')->name('home');
+Volt::route('dashboard', 'dashboard')->name('dashboard');
+Route::get('databases/{database}/export', DatabaseExportController::class)->name('databases.export');
 
 Route::middleware(['auth'])->group(function () {
     Route::redirect('settings', 'settings/profile');

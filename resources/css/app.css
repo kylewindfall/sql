@@ -9,7 +9,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
 
     --color-zinc-50: #fafafa;
     --color-zinc-100: #f5f5f5;
@@ -26,24 +26,50 @@
     --color-accent: var(--color-neutral-800);
     --color-accent-content: var(--color-neutral-800);
     --color-accent-foreground: var(--color-white);
+
+    --color-linear-950: #191a23;
+    --color-linear-900: #1d1e2b;
+    --color-linear-850: #272832;
+    --color-linear-800: #292a35;
+    --color-linear-775: #2c2d3c;
+    --color-linear-750: #292b41;
+    --color-linear-700: #313248;
+    --color-linear-600: #393a4b;
+    --color-linear-500: #4c4f6b;
+    --color-linear-400: #858699;
+    --color-linear-300: #d2d3e0;
+    --color-linear-200: #eeeffc;
+    --color-linear-blue: #5e6ad2;
+    --color-linear-blue-soft: #575bc7;
 }
 
 @layer theme {
     .dark {
-        --color-accent: var(--color-white);
-        --color-accent-content: var(--color-white);
-        --color-accent-foreground: var(--color-neutral-800);
+        --color-accent: var(--color-linear-blue);
+        --color-accent-content: var(--color-linear-blue);
+        --color-accent-foreground: var(--color-linear-200);
     }
 }
 
 @layer base {
-
     *,
     ::after,
     ::before,
     ::backdrop,
     ::file-selector-button {
         border-color: var(--color-gray-200, currentColor);
+    }
+
+    html {
+        color-scheme: dark;
+    }
+
+    body {
+        @apply bg-[var(--color-linear-950)] text-[var(--color-linear-200)] antialiased;
+    }
+
+    [x-cloak] {
+        display: none !important;
     }
 }
 
@@ -52,15 +78,23 @@
 }
 
 [data-flux-label] {
-    @apply  !mb-0 !leading-tight;
+    @apply !mb-0 !leading-tight text-[11px] font-medium tracking-[0.14em] uppercase text-[var(--color-linear-400)];
 }
 
 input:focus[data-flux-control],
 textarea:focus[data-flux-control],
 select:focus[data-flux-control] {
-    @apply outline-hidden ring-2 ring-accent ring-offset-2 ring-offset-accent-foreground;
+    @apply outline-hidden ring-1 ring-[var(--color-linear-blue)] ring-offset-0;
 }
 
-/* \[:where(&)\]:size-4 {
-    @apply size-4;
-} */
+[data-flux-control] {
+    @apply rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] text-[13px] text-[var(--color-linear-200)] shadow-[0_1px_1px_rgba(0,0,0,0.15)];
+}
+
+[data-flux-control]::placeholder {
+    color: var(--color-linear-400);
+}
+
+[data-flux-button] {
+    @apply rounded-[8px] text-[12px] font-medium;
+}

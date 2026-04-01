@@ -1,16 +1,16 @@
 <?php
 
-use App\Models\User;
+test('homepage renders the database manager', function () {
+    $response = $this->get('/');
 
-test('guests are redirected to the login page', function () {
-    $response = $this->get('/dashboard');
-    $response->assertRedirect('/login');
+    $response->assertStatus(200);
+    $response->assertSee('Herd Studio');
+    $response->assertSee('New Connection');
 });
 
-test('authenticated users can visit the dashboard', function () {
-    $user = User::factory()->create();
-    $this->actingAs($user);
-
+test('dashboard renders without authentication', function () {
     $response = $this->get('/dashboard');
+
     $response->assertStatus(200);
+    $response->assertSee('Herd Studio');
 });
