@@ -1090,6 +1090,7 @@ new #[Layout('components.layouts.studio')] class extends Component {
             dbOpen: false,
             actionsOpen: false,
             sourceOpen: false,
+            recentOpen: false,
             connectionModalOpen: false,
             migrationModalOpen: false,
             commandPaletteOpen: false,
@@ -1367,8 +1368,15 @@ new #[Layout('components.layouts.studio')] class extends Component {
 
                     @if ($recentTableItems->isNotEmpty())
                         <div class="@if($pinnedTableItems->isNotEmpty()) mt-3 @endif">
-                            <p class="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-linear-400)]">Recent</p>
-                            <div class="space-y-1">
+                            <button
+                                type="button"
+                                x-on:click="recentOpen = ! recentOpen"
+                                class="mb-2 flex w-full items-center justify-between rounded-[8px] px-2 py-1 text-left transition hover:bg-[var(--color-linear-900)]"
+                            >
+                                <span class="text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-linear-400)]">Recent</span>
+                                <span class="text-[11px] text-[var(--color-linear-500)]" x-text="recentOpen ? 'Hide' : 'Show'"></span>
+                            </button>
+                            <div x-cloak x-show="recentOpen" x-transition.opacity.duration.120ms class="space-y-1">
                                 @foreach ($recentTableItems as $item)
                                     <button
                                         type="button"
