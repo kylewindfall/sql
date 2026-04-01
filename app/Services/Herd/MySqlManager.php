@@ -89,6 +89,34 @@ class MySqlManager
     }
 
     /**
+     * @return array<int, array{database: string, table: string, rows: int}>
+     */
+    public function listTableIndex(?DatabaseConnection $connection = null): array
+    {
+        $statement = $this->connect(connection: $connection)->prepare(<<<'SQL'
+            SELECT
+                TABLE_SCHEMA AS database_name,
+                TABLE_NAME AS table_name,
+                COALESCE(TABLE_ROWS, 0) AS row_count
+            FROM information_schema.TABLES
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_SCHEMA ASC, TABLE_NAME ASC
+        SQL);
+
+        $statement->execute();
+
+        return collect($statement->fetchAll())
+            ->reject(fn (array $row): bool => in_array((string) $row['database_name'], self::SYSTEM_DATABASES, true))
+            ->map(fn (array $row): array => [
+                'database' => (string) $row['database_name'],
+                'table' => (string) $row['table_name'],
+                'rows' => (int) $row['row_count'],
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @return array<int, array{name: string, type: string, full_type: string, nullable: bool, default: mixed, primary: bool, auto_increment: bool, generated: bool, comment: string}>
      */
     public function getTableColumns(string $database, string $table, ?DatabaseConnection $connection = null): array
@@ -125,6 +153,112 @@ class MySqlManager
             'generated' => Str::contains((string) $column['extra'], 'GENERATED'),
             'comment' => (string) ($column['column_comment'] ?? ''),
         ])->all();
+    }
+
+    /**
+     * @return array<int, array{column: string, referenced_table: string, referenced_column: string}>
+     */
+    public function getForeignKeys(string $database, string $table, ?DatabaseConnection $connection = null): array
+    {
+        $this->guardIdentifier($database);
+        $this->guardIdentifier($table);
+
+        $statement = $this->connect(connection: $connection)->prepare(<<<'SQL'
+            SELECT
+                COLUMN_NAME AS column_name,
+                REFERENCED_TABLE_NAME AS referenced_table_name,
+                REFERENCED_COLUMN_NAME AS referenced_column_name
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = ?
+              AND TABLE_NAME = ?
+              AND REFERENCED_TABLE_NAME IS NOT NULL
+            ORDER BY ORDINAL_POSITION ASC
+        SQL);
+
+        $statement->execute([$database, $table]);
+
+        $foreignKeys = collect($statement->fetchAll())
+            ->map(fn (array $row): array => [
+                'column' => (string) $row['column_name'],
+                'referenced_table' => (string) $row['referenced_table_name'],
+                'referenced_column' => (string) $row['referenced_column_name'],
+            ])
+            ->values()
+            ->all();
+
+        return [
+            ...$foreignKeys,
+            ...$this->inferConventionForeignKeys($database, $table, $foreignKeys, $connection),
+        ];
+    }
+
+    /**
+     * @return array{summary: string, fields: array<int, array{label: string, value: string}>}|null
+     */
+    public function getRelatedRecordPreview(
+        string $database,
+        string $table,
+        string $lookupColumn,
+        mixed $lookupValue,
+        ?DatabaseConnection $connection = null,
+    ): ?array {
+        $this->guardIdentifier($database);
+        $this->guardIdentifier($table);
+        $this->guardIdentifier($lookupColumn);
+
+        $tableColumns = collect($this->getTableColumns($database, $table, $connection))->keyBy('name');
+
+        if (! $tableColumns->has($lookupColumn)) {
+            return null;
+        }
+
+        $statement = $this->connect(connection: $connection)->prepare(sprintf(
+            'SELECT * FROM %s WHERE %s = ? LIMIT 1',
+            $this->qualifyTable($database, $table),
+            $this->quoteIdentifier($lookupColumn),
+        ));
+
+        $statement->execute([
+            $this->normalizeValue($tableColumns[$lookupColumn], $lookupValue),
+        ]);
+
+        $record = $statement->fetch();
+
+        if (! is_array($record) || $record === []) {
+            return null;
+        }
+
+        $summary = collect(['name', 'title', 'label', 'email', 'slug'])
+            ->map(fn (string $column): ?string => isset($record[$column]) && $record[$column] !== null && $record[$column] !== ''
+                ? Str::limit((string) $record[$column], 72)
+                : null)
+            ->filter()
+            ->first();
+
+        $fields = collect($record)
+            ->map(fn (mixed $value, string $column): array => [
+                'label' => $column,
+                'value' => $this->stringifyPreviewValue($value),
+            ])
+            ->reject(fn (array $field): bool => $field['value'] === '')
+            ->sortBy(fn (array $field): int => match ($field['label']) {
+                'id' => 0,
+                'name', 'title', 'label', 'email', 'slug' => 1,
+                default => 2,
+            })
+            ->take(4)
+            ->values()
+            ->all();
+
+        if ($summary === null) {
+            $identifier = $record[$lookupColumn] ?? $record['id'] ?? null;
+            $summary = Str::headline(Str::singular($table)).($identifier !== null ? ' #'.$identifier : '');
+        }
+
+        return [
+            'summary' => $summary,
+            'fields' => $fields,
+        ];
     }
 
     /**
@@ -303,14 +437,8 @@ class MySqlManager
     {
         $this->guardIdentifier($database);
 
-        $temporaryPath = storage_path('app/private/exports');
-
-        if (! is_dir($temporaryPath) && ! mkdir($temporaryPath, 0755, true) && ! is_dir($temporaryPath)) {
-            throw new RuntimeException('Unable to prepare the export directory.');
-        }
-
         $sourceSlug = $connection?->id ? 'connection-'.$connection->id : 'local';
-        $exportPath = $temporaryPath.'/'.Str::slug($sourceSlug.'-'.$database).'-'.now()->format('YmdHis').'.sql';
+        $exportPath = $this->prepareExportPath(Str::slug($sourceSlug.'-'.$database).'-'.now()->format('YmdHis').'.sql');
 
         $this->runCliCommand([
             ...$this->mysqldumpCommand($database, $connection),
@@ -318,6 +446,104 @@ class MySqlManager
         ]);
 
         return $exportPath;
+    }
+
+    public function exportTableCsv(
+        string $database,
+        string $table,
+        string $search = '',
+        ?string $sortColumn = null,
+        string $sortDirection = 'asc',
+        ?DatabaseConnection $connection = null,
+    ): string {
+        $this->guardIdentifier($database);
+        $this->guardIdentifier($table);
+
+        $sourceSlug = $connection?->id ? 'connection-'.$connection->id : 'local';
+        $exportPath = $this->prepareExportPath(Str::slug($sourceSlug.'-'.$database.'-'.$table).'-'.now()->format('YmdHis').'.csv');
+        $columns = $this->getColumnNames($database, $table, $connection);
+        $rows = $this->getAllTableRows($database, $table, $search, $sortColumn, $sortDirection, $connection);
+        $handle = fopen($exportPath, 'wb');
+
+        if ($handle === false) {
+            throw new RuntimeException('Unable to create the CSV export.');
+        }
+
+        fputcsv($handle, $columns);
+
+        foreach ($rows as $row) {
+            fputcsv($handle, collect($columns)->map(fn (string $column): mixed => $row[$column] ?? null)->all());
+        }
+
+        fclose($handle);
+
+        return $exportPath;
+    }
+
+    public function importTableCsv(string $database, string $table, string $csvPath, ?DatabaseConnection $connection = null): int
+    {
+        $this->guardIdentifier($database);
+        $this->guardIdentifier($table);
+        $this->ensureReadableFile($csvPath);
+
+        $handle = fopen($csvPath, 'rb');
+
+        if ($handle === false) {
+            throw new RuntimeException('Unable to read the CSV import.');
+        }
+
+        $header = fgetcsv($handle);
+
+        if (! is_array($header) || $header === []) {
+            fclose($handle);
+
+            throw new RuntimeException('The CSV file must include a header row.');
+        }
+
+        $editableColumns = collect($this->getEditableColumns($database, $table, $connection, true))
+            ->pluck('name')
+            ->all();
+
+        $columnNames = collect($header)
+            ->map(fn (mixed $column): string => trim((string) $column))
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($columnNames === []) {
+            fclose($handle);
+
+            throw new RuntimeException('The CSV header row is empty.');
+        }
+
+        foreach ($columnNames as $columnName) {
+            if (! in_array($columnName, $editableColumns, true)) {
+                fclose($handle);
+
+                throw new RuntimeException("The CSV column [{$columnName}] cannot be imported into {$table}.");
+            }
+        }
+
+        $importedRows = 0;
+
+        while (($row = fgetcsv($handle)) !== false) {
+            if ($row === [null] || $row === []) {
+                continue;
+            }
+
+            $payload = collect($columnNames)
+                ->mapWithKeys(fn (string $columnName, int $index): array => [
+                    $columnName => array_key_exists($index, $row) ? (string) $row[$index] : '',
+                ])
+                ->all();
+
+            $this->insertRow($database, $table, $payload, $connection);
+            $importedRows++;
+        }
+
+        fclose($handle);
+
+        return $importedRows;
     }
 
     /**
@@ -426,6 +652,61 @@ class MySqlManager
     }
 
     /**
+     * @param  array<int, array{column: string, referenced_table: string, referenced_column: string}>  $foreignKeys
+     * @return array<int, array{column: string, referenced_table: string, referenced_column: string}>
+     */
+    protected function inferConventionForeignKeys(
+        string $database,
+        string $table,
+        array $foreignKeys,
+        ?DatabaseConnection $connection = null,
+    ): array {
+        $knownForeignKeyColumns = collect($foreignKeys)
+            ->pluck('column')
+            ->map(fn (string $column): string => Str::lower($column))
+            ->all();
+
+        $tablesByLowerName = collect($this->listTables($database, $connection))
+            ->pluck('name')
+            ->mapWithKeys(fn (string $name): array => [Str::lower($name) => $name])
+            ->all();
+
+        return collect($this->getTableColumns($database, $table, $connection))
+            ->pluck('name')
+            ->filter(fn (string $columnName): bool => Str::endsWith(Str::lower($columnName), '_id'))
+            ->reject(fn (string $columnName): bool => in_array(Str::lower($columnName), $knownForeignKeyColumns, true))
+            ->map(function (string $columnName) use ($tablesByLowerName): ?array {
+                $baseName = Str::beforeLast(Str::lower($columnName), '_id');
+
+                if ($baseName === '') {
+                    return null;
+                }
+
+                $candidateTables = collect([
+                    Str::snake(Str::pluralStudly(Str::studly($baseName))),
+                    Str::snake(Str::plural($baseName)),
+                ])->filter()->unique();
+
+                $referencedTable = $candidateTables
+                    ->map(fn (string $candidate): ?string => $tablesByLowerName[Str::lower($candidate)] ?? null)
+                    ->first();
+
+                if ($referencedTable === null) {
+                    return null;
+                }
+
+                return [
+                    'column' => $columnName,
+                    'referenced_table' => $referencedTable,
+                    'referenced_column' => 'id',
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param  array<string, mixed>  $identifiers
      * @return array{0: string, 1: array<int, mixed>}
      */
@@ -490,9 +771,78 @@ class MySqlManager
         ], true);
     }
 
+    private function stringifyPreviewValue(mixed $value): string
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if (is_scalar($value)) {
+            return Str::limit((string) $value, 72);
+        }
+
+        return Str::limit(json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '', 72);
+    }
+
     private function pageSize(): int
     {
         return max((int) config('herd.mysql.page_size', 25), 1);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function getAllTableRows(
+        string $database,
+        string $table,
+        string $search = '',
+        ?string $sortColumn = null,
+        string $sortDirection = 'asc',
+        ?DatabaseConnection $connection = null,
+    ): array {
+        $qualifiedTable = $this->qualifyTable($database, $table);
+        [$whereClause, $wherePayload] = $this->buildSearchClause($database, $table, $search, $connection);
+        $columnNames = $this->getColumnNames($database, $table, $connection);
+        $primaryKeyColumns = $this->getPrimaryKeyColumns($database, $table, $connection);
+        $sortColumn = $sortColumn !== null && in_array($sortColumn, $columnNames, true)
+            ? $sortColumn
+            : Arr::first($primaryKeyColumns) ?? Arr::first($columnNames);
+        $sortDirection = strtolower($sortDirection) === 'desc' ? 'DESC' : 'ASC';
+        $orderColumns = $sortColumn !== null ? [$sortColumn] : ($primaryKeyColumns !== [] ? $primaryKeyColumns : [Arr::first($columnNames)]);
+        $orderClause = collect($orderColumns)
+            ->filter()
+            ->map(fn (string $column): string => $this->quoteIdentifier($column).' '.$sortDirection)
+            ->implode(', ');
+
+        $query = "SELECT * FROM {$qualifiedTable}";
+
+        if ($whereClause !== '') {
+            $query .= " WHERE {$whereClause}";
+        }
+
+        if ($orderClause !== '') {
+            $query .= " ORDER BY {$orderClause}";
+        }
+
+        $statement = $this->connect(connection: $connection)->prepare($query);
+        $statement->execute($wherePayload);
+
+        return $statement->fetchAll();
+    }
+
+    private function prepareExportPath(string $fileName): string
+    {
+        $temporaryPath = storage_path('app/private/exports');
+
+        if (! is_dir($temporaryPath) && ! mkdir($temporaryPath, 0755, true) && ! is_dir($temporaryPath)) {
+            throw new RuntimeException('Unable to prepare the export directory.');
+        }
+
+        return $temporaryPath.'/'.$fileName;
     }
 
     /**
