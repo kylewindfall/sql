@@ -6,6 +6,7 @@ use App\Services\Herd\MySqlManager;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Number;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
@@ -262,15 +263,19 @@ new #[Layout('components.layouts.studio')] class extends Component {
     {
         try {
             $validated = $this->validate([
-                'importDatabaseName' => ['required', 'string', 'max:64', 'regex:/^[A-Za-z0-9_$-]+$/'],
+                'importDatabaseName' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_$-]+$/'],
                 'importFile' => ['required', 'file', 'max:51200', 'extensions:sql,txt'],
             ]);
 
-            app(MySqlManager::class)->importDatabase($validated['importDatabaseName'], $this->importFile->getRealPath(), $this->activeConnection());
+            $databaseName = $this->resolveImportDatabaseName($validated['importDatabaseName'] ?? null);
+
+            app(MySqlManager::class)->importDatabase($databaseName, $this->importFile->getRealPath(), $this->activeConnection());
 
             $this->reset('importFile');
-            $this->selectedDatabase = $validated['importDatabaseName'];
+            $this->importDatabaseName = $databaseName;
+            $this->selectedDatabase = $databaseName;
             $this->refreshWorkspace();
+            $this->dispatch('database-imported', database: $this->selectedDatabase);
 
             $this->notifySuccess('SQL import complete', "Imported dump into {$this->selectedDatabase}.");
         } catch (\Throwable $exception) {
@@ -884,6 +889,28 @@ new #[Layout('components.layouts.studio')] class extends Component {
             ->all();
     }
 
+    private function resolveImportDatabaseName(?string $databaseName): string
+    {
+        $resolvedDatabaseName = trim((string) $databaseName);
+
+        if ($resolvedDatabaseName === '' && $this->importFile !== null) {
+            $resolvedDatabaseName = Str::of($this->importFile->getClientOriginalName())
+                ->beforeLast('.')
+                ->replaceMatches('/[^A-Za-z0-9_$]+/', '_')
+                ->trim('_')
+                ->substr(0, 64)
+                ->toString();
+        }
+
+        if ($resolvedDatabaseName === '' || ! preg_match('/^[A-Za-z0-9_$-]+$/', $resolvedDatabaseName)) {
+            throw ValidationException::withMessages([
+                'importDatabaseName' => 'Provide a valid database name or upload a file with a usable filename.',
+            ]);
+        }
+
+        return $resolvedDatabaseName;
+    }
+
     /**
      * @param  array<string, mixed>  $row
      * @return array<string, mixed>
@@ -1088,7 +1115,7 @@ new #[Layout('components.layouts.studio')] class extends Component {
         class="min-h-screen xl:pl-[15vw]"
         x-data="{
             dbOpen: false,
-            actionsOpen: false,
+            actionsDrawerOpen: false,
             sourceOpen: false,
             recentOpen: false,
             connectionModalOpen: false,
@@ -1211,7 +1238,167 @@ new #[Layout('components.layouts.studio')] class extends Component {
         x-on:keydown.window="if ($event.key === 'g' && !['INPUT','TEXTAREA','SELECT'].includes($event.target.tagName)) { beginShortcut('g') } else if (shortcutPrefix === 'g' && $event.key.toLowerCase() === 'd') { $wire.switchTab('data'); shortcutPrefix = null } else if (shortcutPrefix === 'g' && $event.key.toLowerCase() === 's') { $wire.switchTab('schema'); shortcutPrefix = null }"
         x-on:keydown.window="if ($event.key.toLowerCase() === 'e' && activeCell.row !== null && !['INPUT','TEXTAREA','SELECT'].includes($event.target.tagName)) { $wire.startEditingRow(activeCell.row) }"
         x-on:toast.window="pushToast($event.detail)"
+        x-on:keydown.escape.window="actionsDrawerOpen = false"
+        x-on:database-imported.window="actionsDrawerOpen = false"
     >
+        <div
+            x-cloak
+            x-show="actionsDrawerOpen"
+            x-transition.opacity.duration.180ms
+            class="fixed inset-0 z-40 bg-[rgba(2,4,8,0.58)] backdrop-blur-md"
+            x-on:click="actionsDrawerOpen = false"
+        ></div>
+
+        <div
+            x-cloak
+            x-show="actionsDrawerOpen"
+            x-transition:enter="transform transition ease-[cubic-bezier(0.22,1,0.36,1)] duration-220"
+            x-transition:enter-start="-translate-x-full opacity-0"
+            x-transition:enter-end="translate-x-0 opacity-100"
+            x-transition:leave="transform transition ease-in duration-160"
+            x-transition:leave-start="translate-x-0 opacity-100"
+            x-transition:leave-end="-translate-x-full opacity-0"
+            class="fixed inset-y-0 left-0 z-50 w-[min(26rem,calc(100vw-1rem))] border-r border-white/10 bg-[var(--color-linear-950)]/78 shadow-[24px_0_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl"
+        >
+            <div class="flex h-full flex-col">
+                <div class="flex items-start justify-between gap-4 border-b border-white/10 bg-white/4 px-5 py-5">
+                    <div>
+                        <p class="text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-linear-400)]">Actions</p>
+                        <p class="pt-1 text-sm font-medium text-[var(--color-linear-200)]">Import, export, create</p>
+                    </div>
+                    <button
+                        type="button"
+                        x-on:click="actionsDrawerOpen = false"
+                        class="rounded-[10px] border border-[var(--color-linear-700)] bg-[var(--color-linear-900)] px-3 py-2 text-[12px] font-medium text-[var(--color-linear-300)] transition hover:border-[var(--color-linear-600)] hover:text-[var(--color-linear-200)]"
+                    >
+                        Close
+                    </button>
+                </div>
+
+                <div class="min-h-0 flex-1 space-y-3 overflow-y-auto bg-gradient-to-b from-white/3 via-transparent to-transparent px-5 py-5">
+                    <div class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3">
+                        <div class="flex items-center justify-between">
+                            <p class="text-xs font-medium text-[var(--color-linear-300)]">Quick actions</p>
+                            @if ($selectedDatabase !== '')
+                                <a
+                                    href="{{ route('databases.export', ['database' => $selectedDatabase, 'source' => $selectedSource]) }}"
+                                    class="text-xs font-medium text-[var(--color-linear-blue)]"
+                                >
+                                    Export
+                                </a>
+                            @endif
+                        </div>
+
+                        <button
+                            type="button"
+                            wire:click="startCreatingRow"
+                            x-on:click="actionsDrawerOpen = false"
+                            class="flex w-full items-center justify-between rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-left text-[13px] text-[var(--color-linear-200)] transition hover:border-[var(--color-linear-blue)]"
+                        >
+                            <span>Add row</span>
+                            <span class="text-[var(--color-linear-400)]">Data tab</span>
+                        </button>
+                    </div>
+
+                    <form wire:submit="importTableCsv" class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="text-xs font-medium text-[var(--color-linear-300)]">Import CSV</p>
+                            <span class="text-[11px] text-[var(--color-linear-500)]">{{ $selectedTable !== '' ? $selectedTable : 'Select table' }}</span>
+                        </div>
+                        <input
+                            type="file"
+                            wire:model="tableImportFile"
+                            accept=".csv,.txt"
+                            @disabled($selectedTable === '')
+                            class="block w-full text-[12px] text-[var(--color-linear-400)] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[var(--color-linear-800)] file:px-3 file:py-2 file:text-[12px] file:font-medium file:text-[var(--color-linear-200)] disabled:opacity-40"
+                        />
+                        <button
+                            type="submit"
+                            @disabled($selectedTable === '')
+                            class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] font-medium text-[var(--color-linear-200)] transition hover:border-[var(--color-linear-blue)] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Import rows
+                        </button>
+                    </form>
+
+                    <form wire:submit="createDatabase" class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3">
+                        <p class="text-xs font-medium text-[var(--color-linear-300)]">Create database</p>
+                        <input
+                            type="text"
+                            wire:model="newDatabaseName"
+                            placeholder="new_workspace"
+                            class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] text-[var(--color-linear-200)] outline-none transition placeholder:text-[var(--color-linear-400)] focus:border-[var(--color-linear-blue)]"
+                        />
+                        <button type="submit" class="w-full rounded-[8px] bg-[var(--color-linear-blue)] px-3 py-2 text-[13px] font-medium text-white transition hover:brightness-110">
+                            Create
+                        </button>
+                    </form>
+
+                    <form
+                        wire:submit="importDatabase"
+                        x-data="{ importUploadProgress: 0, importUploadReady: false }"
+                        x-on:livewire-upload-start="importUploadProgress = 0; importUploadReady = false"
+                        x-on:livewire-upload-progress="importUploadProgress = $event.detail.progress"
+                        x-on:livewire-upload-finish="importUploadProgress = 100; importUploadReady = true"
+                        x-on:livewire-upload-error="importUploadProgress = 0; importUploadReady = false"
+                        class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3"
+                    >
+                        <p class="text-xs font-medium text-[var(--color-linear-300)]">Import MySQL database</p>
+                        <input
+                            type="text"
+                            wire:model="importDatabaseName"
+                            placeholder="Leave blank to use filename"
+                            class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] text-[var(--color-linear-200)] outline-none transition placeholder:text-[var(--color-linear-400)] focus:border-[var(--color-linear-blue)]"
+                        />
+                        <input
+                            type="file"
+                            wire:model="importFile"
+                            x-on:change="importUploadReady = false; importUploadProgress = 0"
+                            accept=".sql,.txt"
+                            class="block w-full text-[12px] text-[var(--color-linear-400)] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[var(--color-linear-800)] file:px-3 file:py-2 file:text-[12px] file:font-medium file:text-[var(--color-linear-200)]"
+                        />
+                        @error('importFile')
+                            <p class="text-[12px] font-medium text-red-300">{{ $message }}</p>
+                        @enderror
+                        @error('importDatabaseName')
+                            <p class="text-[12px] font-medium text-red-300">{{ $message }}</p>
+                        @enderror
+                        <div
+                            x-cloak
+                            x-show="importUploadProgress > 0 && importUploadProgress < 100"
+                            class="space-y-2 rounded-[10px] border border-[var(--color-linear-700)] bg-[var(--color-linear-875)] px-3 py-2.5"
+                        >
+                            <div class="flex items-center justify-between text-[11px] font-medium text-[var(--color-linear-300)]">
+                                <span>Uploading SQL file…</span>
+                                <span x-text="`${importUploadProgress}%`"></span>
+                            </div>
+                            <div class="h-1.5 overflow-hidden rounded-full bg-[var(--color-linear-800)]">
+                                <div class="h-full rounded-full bg-[var(--color-linear-blue)] transition-all duration-200" x-bind:style="`width: ${importUploadProgress}%`"></div>
+                            </div>
+                        </div>
+                        <div
+                            wire:loading.flex
+                            wire:target="importDatabase"
+                            class="items-center gap-2 rounded-[10px] border border-[var(--color-linear-700)] bg-[var(--color-linear-875)] px-3 py-2.5 text-[12px] font-medium text-[var(--color-linear-300)]"
+                        >
+                            <span class="inline-block size-2 rounded-full bg-[var(--color-linear-blue)] animate-pulse"></span>
+                            <span>Importing SQL dump into MySQL…</span>
+                        </div>
+                        <button
+                            type="submit"
+                            wire:loading.attr="disabled"
+                            wire:target="importFile,importDatabase"
+                            x-bind:disabled="!importUploadReady"
+                            class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] font-medium text-[var(--color-linear-200)] transition hover:border-[var(--color-linear-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <span wire:loading.remove wire:target="importFile,importDatabase">Create + Import</span>
+                            <span wire:loading wire:target="importFile,importDatabase">Importing…</span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
         <aside
             class="flex min-h-screen flex-col border-r border-[var(--color-linear-775)] bg-[var(--color-linear-950)] xl:fixed xl:inset-y-0 xl:left-0 xl:w-[15vw]"
         >
@@ -1443,94 +1630,15 @@ new #[Layout('components.layouts.studio')] class extends Component {
             <div class="mt-auto border-t border-[var(--color-linear-775)] px-4 py-4">
                 <button
                     type="button"
-                    x-on:click="actionsOpen = ! actionsOpen"
+                    x-on:click="actionsDrawerOpen = true"
                     class="flex w-full items-center justify-between rounded-[10px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] px-3 py-2.5 text-left shadow-[0_1px_1px_rgba(0,0,0,0.15)] transition hover:border-[var(--color-linear-600)]"
                 >
                     <div>
                         <p class="text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-linear-400)]">Actions</p>
                         <p class="pt-1 text-sm font-medium text-[var(--color-linear-200)]">Import, export, create</p>
                     </div>
-                    <span class="text-xs text-[var(--color-linear-400)]" x-text="actionsOpen ? 'Hide' : 'Show'"></span>
+                    <span class="text-xs text-[var(--color-linear-400)]">Open</span>
                 </button>
-
-                <div x-cloak x-show="actionsOpen" x-transition.opacity.duration.120ms class="mt-3 space-y-3">
-                        <div class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3">
-                            <div class="flex items-center justify-between">
-                                <p class="text-xs font-medium text-[var(--color-linear-300)]">Quick actions</p>
-                                @if ($selectedDatabase !== '')
-                                    <a
-                                        href="{{ route('databases.export', ['database' => $selectedDatabase, 'source' => $selectedSource]) }}"
-                                        class="text-xs font-medium text-[var(--color-linear-blue)]"
-                                    >
-                                        Export
-                                </a>
-                            @endif
-                        </div>
-
-                        <button
-                            type="button"
-                            wire:click="startCreatingRow"
-                            class="flex w-full items-center justify-between rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-left text-[13px] text-[var(--color-linear-200)] transition hover:border-[var(--color-linear-blue)]"
-                        >
-                            <span>Add row</span>
-                            <span class="text-[var(--color-linear-400)]">Data tab</span>
-                        </button>
-                    </div>
-
-                    <form wire:submit="importTableCsv" class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3">
-                        <div class="flex items-center justify-between gap-3">
-                            <p class="text-xs font-medium text-[var(--color-linear-300)]">Import CSV</p>
-                            <span class="text-[11px] text-[var(--color-linear-500)]">{{ $selectedTable !== '' ? $selectedTable : 'Select table' }}</span>
-                        </div>
-                        <input
-                            type="file"
-                            wire:model="tableImportFile"
-                            accept=".csv,.txt"
-                            @disabled($selectedTable === '')
-                            class="block w-full text-[12px] text-[var(--color-linear-400)] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[var(--color-linear-800)] file:px-3 file:py-2 file:text-[12px] file:font-medium file:text-[var(--color-linear-200)] disabled:opacity-40"
-                        />
-                        <button
-                            type="submit"
-                            @disabled($selectedTable === '')
-                            class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] font-medium text-[var(--color-linear-200)] transition hover:border-[var(--color-linear-blue)] disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            Import rows
-                        </button>
-                    </form>
-
-                    <form wire:submit="createDatabase" class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3">
-                        <p class="text-xs font-medium text-[var(--color-linear-300)]">Create database</p>
-                        <input
-                            type="text"
-                            wire:model="newDatabaseName"
-                            placeholder="new_workspace"
-                            class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] text-[var(--color-linear-200)] outline-none transition placeholder:text-[var(--color-linear-400)] focus:border-[var(--color-linear-blue)]"
-                        />
-                        <button type="submit" class="w-full rounded-[8px] bg-[var(--color-linear-blue)] px-3 py-2 text-[13px] font-medium text-white transition hover:brightness-110">
-                            Create
-                        </button>
-                    </form>
-
-                    <form wire:submit="importDatabase" class="space-y-2 rounded-[12px] border border-[var(--color-linear-750)] bg-[var(--color-linear-900)] p-3">
-                        <p class="text-xs font-medium text-[var(--color-linear-300)]">Import SQL</p>
-                        <input
-                            type="text"
-                            wire:model="importDatabaseName"
-                            placeholder="target_database"
-                            class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] text-[var(--color-linear-200)] outline-none transition placeholder:text-[var(--color-linear-400)] focus:border-[var(--color-linear-blue)]"
-                        />
-                        <input
-                            type="file"
-                            wire:model="importFile"
-                            accept=".sql,.txt"
-                            class="block w-full text-[12px] text-[var(--color-linear-400)] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[var(--color-linear-800)] file:px-3 file:py-2 file:text-[12px] file:font-medium file:text-[var(--color-linear-200)]"
-                        />
-                        <button type="submit" class="w-full rounded-[8px] border border-[var(--color-linear-600)] bg-[var(--color-linear-800)] px-3 py-2 text-[13px] font-medium text-[var(--color-linear-200)] transition hover:border-[var(--color-linear-blue)]">
-                            Import
-                        </button>
-                    </form>
-
-                </div>
             </div>
         </aside>
 
@@ -1679,21 +1787,27 @@ new #[Layout('components.layouts.studio')] class extends Component {
                             </div>
                         </div>
 
+                    </div>
+
+                    <div class="relative min-h-0 flex-1 overflow-auto px-6 py-5" wire:loading.class="opacity-60">
                         @if ($selectedRowIndexes !== [])
-                            <div class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-[var(--color-linear-775)] bg-[var(--color-linear-900)] px-3 py-2.5">
-                                <div class="text-[13px] text-[var(--color-linear-300)]">
-                                    {{ count($selectedRowIndexes) }} rows selected
-                                </div>
-                                <div class="flex items-center gap-2">
-                                    <button type="button" wire:click="duplicateSelectedRows" class="rounded-[8px] border border-[var(--color-linear-600)] px-3 py-2 text-[12px] font-medium text-[var(--color-linear-300)] transition hover:border-[var(--color-linear-blue)]">Duplicate</button>
-                                    <button type="button" wire:click="bulkDeleteSelectedRows" class="rounded-[8px] border border-transparent bg-red-500/12 px-3 py-2 text-[12px] font-medium text-red-200 transition hover:bg-red-500/18">Delete</button>
-                                    <button type="button" wire:click="clearSelectedRows" class="rounded-[8px] border border-[var(--color-linear-600)] px-3 py-2 text-[12px] font-medium text-[var(--color-linear-300)]">Clear</button>
+                            <div
+                                data-selection-chip
+                                class="pointer-events-none absolute right-6 top-5 z-30 flex justify-end"
+                            >
+                                <div class="pointer-events-auto inline-flex items-center gap-2 rounded-[12px] border border-white/8 bg-[rgba(10,12,16,0.88)] px-2.5 py-2 shadow-[0_18px_40px_rgba(0,0,0,0.32)] backdrop-blur-xl">
+                                    <div class="rounded-full bg-[var(--color-linear-blue)]/16 px-2 py-1 text-[11px] font-medium text-[var(--color-linear-200)]">
+                                        {{ count($selectedRowIndexes) }} selected
+                                    </div>
+                                    <div class="flex items-center gap-1.5">
+                                        <button type="button" wire:click="duplicateSelectedRows" class="rounded-[8px] border border-white/8 bg-white/4 px-2.5 py-1.5 text-[11px] font-medium text-[var(--color-linear-300)] transition hover:border-[var(--color-linear-blue)] hover:text-[var(--color-linear-200)]">Duplicate</button>
+                                        <button type="button" wire:click="bulkDeleteSelectedRows" class="rounded-[8px] border border-transparent bg-red-500/14 px-2.5 py-1.5 text-[11px] font-medium text-red-200 transition hover:bg-red-500/20">Delete</button>
+                                        <button type="button" wire:click="clearSelectedRows" class="rounded-[8px] border border-white/8 bg-white/4 px-2.5 py-1.5 text-[11px] font-medium text-[var(--color-linear-300)] transition hover:border-white/16 hover:text-[var(--color-linear-200)]">Clear</button>
+                                    </div>
                                 </div>
                             </div>
                         @endif
-                    </div>
 
-                    <div class="min-h-0 flex-1 overflow-auto px-6 py-5" wire:loading.class="opacity-60">
                         <div class="overflow-hidden rounded-[12px] border border-[var(--color-linear-775)] bg-[var(--color-linear-900)] shadow-[0_1px_2px_rgba(0,0,0,0.25)]">
                             @if ($selectedTable === '')
                                 <div class="flex min-h-[28rem] items-center justify-center px-6 text-sm text-[var(--color-linear-400)]">
@@ -2137,7 +2251,7 @@ new #[Layout('components.layouts.studio')] class extends Component {
 
                         <div>
                             <label class="mb-2 block text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-linear-400)]">RSA key path</label>
-                            <input type="text" wire:model="connectionPrivateKeyPath" placeholder="/Users/kylemcgowan/.ssh/id_rsa" class="w-full rounded-[10px] border border-[var(--color-linear-600)] bg-[var(--color-linear-850)] px-3 py-2.5 text-[13px] text-[var(--color-linear-200)] outline-none transition placeholder:text-[var(--color-linear-400)] focus:border-[var(--color-linear-blue)]" />
+                            <input type="text" wire:model="connectionPrivateKeyPath" placeholder="~/.ssh/id_rsa" class="w-full rounded-[10px] border border-[var(--color-linear-600)] bg-[var(--color-linear-850)] px-3 py-2.5 text-[13px] text-[var(--color-linear-200)] outline-none transition placeholder:text-[var(--color-linear-400)] focus:border-[var(--color-linear-blue)]" />
                         </div>
 
                         <div>

@@ -419,6 +419,7 @@ fn ensure_ssh_tunnel(source: &SavedSource, state: &State<'_, AppState>) -> Backe
         .private_key_path
         .clone()
         .ok_or_else(|| BackendError::Message("SSH private key path is required.".to_string()))?;
+    let private_key_path = expand_home_path(&private_key_path);
     let ssh_port = source.ssh_port.unwrap_or(22);
     let mut tunnels = state
         .tunnels
@@ -482,6 +483,20 @@ fn ensure_ssh_tunnel(source: &SavedSource, state: &State<'_, AppState>) -> Backe
     wait_for_tunnel_ready(local_port)?;
 
     Ok(local_port)
+}
+
+fn expand_home_path(path: &str) -> String {
+    if path == "~" {
+        return std::env::var("HOME").unwrap_or_else(|_| path.to_string());
+    }
+
+    if let Some(stripped) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}/{stripped}");
+        }
+    }
+
+    path.to_string()
 }
 
 fn available_port() -> BackendResult<u16> {

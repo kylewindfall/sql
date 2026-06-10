@@ -135,7 +135,7 @@ export function Sidebar({
                 privateKeyPath: event.target.value,
               })
             }
-            placeholder="/Users/kyle/.ssh/id_rsa"
+            placeholder="~/.ssh/id_rsa"
           />
           <input
             value={connectionDraft.databaseUsername}

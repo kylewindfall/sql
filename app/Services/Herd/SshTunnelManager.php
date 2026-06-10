@@ -14,8 +14,10 @@ class SshTunnelManager
             throw new RuntimeException("Unsupported connection driver [{$connection->driver}].");
         }
 
-        if (! is_file($connection->private_key_path)) {
-            throw new RuntimeException("RSA private key not found at [{$connection->private_key_path}].");
+        $privateKeyPath = $this->resolvePrivateKeyPath($connection->private_key_path);
+
+        if (! is_file($privateKeyPath)) {
+            throw new RuntimeException("RSA private key not found at [{$privateKeyPath}].");
         }
 
         if (! $this->isRunning($connection)) {
@@ -65,6 +67,8 @@ class SshTunnelManager
 
     private function start(DatabaseConnection $connection): void
     {
+        $privateKeyPath = $this->resolvePrivateKeyPath($connection->private_key_path);
+
         $process = new Process([
             'ssh',
             '-f',
@@ -83,7 +87,7 @@ class SshTunnelManager
             '-o',
             'StrictHostKeyChecking=accept-new',
             '-i',
-            $connection->private_key_path,
+            $privateKeyPath,
             '-L',
             $this->localPort($connection).':'.$connection->database_host.':'.$connection->database_port,
             '-p',
@@ -101,5 +105,18 @@ class SshTunnelManager
     private function destination(DatabaseConnection $connection): string
     {
         return $connection->ssh_username.'@'.$connection->host;
+    }
+
+    private function resolvePrivateKeyPath(string $path): string
+    {
+        if ($path === '~') {
+            return (string) env('HOME', $path);
+        }
+
+        if (str_starts_with($path, '~/')) {
+            return (string) env('HOME', '').substr($path, 1);
+        }
+
+        return $path;
     }
 }

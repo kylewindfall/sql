@@ -10,7 +10,7 @@ test('database connection passwords are encrypted at rest', function () {
         'host' => 'app.example.com',
         'port' => 22,
         'ssh_username' => 'forge',
-        'private_key_path' => '/Users/kyle/.ssh/id_rsa',
+        'private_key_path' => '~/.ssh/id_rsa',
         'database_host' => '127.0.0.1',
         'database_port' => 3306,
         'database_username' => 'forge',

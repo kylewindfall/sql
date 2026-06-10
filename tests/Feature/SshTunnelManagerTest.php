@@ -21,3 +21,30 @@ test('ssh tunnel manager rejects missing rsa key paths', function () {
     expect(fn () => app(SshTunnelManager::class)->ensure($connection))
         ->toThrow(RuntimeException::class, 'RSA private key not found');
 });
+
+test('ssh tunnel manager expands home-relative rsa key paths before validation', function () {
+    $originalHome = getenv('HOME');
+    $originalServerHome = $_SERVER['HOME'] ?? null;
+
+    putenv('HOME=/tmp/herd-ssh-home');
+    $_ENV['HOME'] = '/tmp/herd-ssh-home';
+    $_SERVER['HOME'] = '/tmp/herd-ssh-home';
+
+    $connection = DatabaseConnection::factory()->make([
+        'id' => 3,
+        'private_key_path' => '~/.ssh/id_rsa',
+    ]);
+
+    expect(fn () => app(SshTunnelManager::class)->ensure($connection))
+        ->toThrow(RuntimeException::class, 'RSA private key not found at [/tmp/herd-ssh-home/.ssh/id_rsa].');
+
+    if ($originalHome === false) {
+        putenv('HOME');
+        unset($_ENV['HOME']);
+        unset($_SERVER['HOME']);
+    } else {
+        putenv("HOME={$originalHome}");
+        $_ENV['HOME'] = $originalHome;
+        $_SERVER['HOME'] = $originalServerHome ?? $originalHome;
+    }
+});

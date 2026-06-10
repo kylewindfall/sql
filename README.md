@@ -53,11 +53,33 @@ HERD_MYSQL_PORT=3306
 HERD_MYSQL_SOCKET=
 HERD_MYSQL_USERNAME=root
 HERD_MYSQL_PASSWORD=
-HERD_MYSQL_DUMP_BINARY=
-HERD_MYSQL_IMPORT_BINARY=
+HERD_MYSQL_BINARY=
+HERD_MYSQLDUMP_BINARY=
 ```
 
 The app uses your local Herd MySQL server for browsing databases. The default saved local source expects MySQL at `127.0.0.1:3306` with username `root`.
+
+The codebase does not hardcode one machine's filesystem paths anymore:
+
+- Herd CLI binaries default to `~/Library/Application Support/Herd/bin/mysql` and `~/Library/Application Support/Herd/bin/mysqldump` for the current macOS user.
+- SSH key paths in the UI can be entered as `~/.ssh/id_rsa`; the app expands `~` to the current user's home directory at runtime.
+
+Set overrides in `.env` only if your machine uses non-standard locations:
+
+```env
+HERD_MYSQL_BINARY="/custom/path/to/mysql"
+HERD_MYSQLDUMP_BINARY="/custom/path/to/mysqldump"
+HERD_MYSQL_SOCKET="/custom/path/to/mysql.sock"
+```
+
+Useful commands for finding those paths on another Mac:
+
+```bash
+which mysql
+which mysqldump
+echo ~/.ssh/id_rsa
+ls ~/Library/Application\\ Support/Herd/bin
+```
 
 7. Run the database migrations used by the app itself:
 
@@ -105,5 +127,5 @@ vendor/bin/pint --dirty --format agent
 ## Notes
 
 - The Laravel web app lives in the repository root.
-- The desktop rewrite is in [`desktop/`](/Users/kylemcgowan/Herd/sql/desktop) and is separate from the Laravel install flow above.
+- The desktop rewrite is in `desktop/` and is separate from the Laravel install flow above.
 - If the UI looks stale after frontend changes, run `npm run build` or `npm run dev`.

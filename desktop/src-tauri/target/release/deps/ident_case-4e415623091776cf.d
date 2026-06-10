@@ -1,0 +1,7 @@
+/Users/kylemcgowan/Herd/sql/desktop/src-tauri/target/release/deps/ident_case-4e415623091776cf.d: /Users/kylemcgowan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ident_case-1.0.1/src/lib.rs
+
+/Users/kylemcgowan/Herd/sql/desktop/src-tauri/target/release/deps/libident_case-4e415623091776cf.rlib: /Users/kylemcgowan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ident_case-1.0.1/src/lib.rs
+
+/Users/kylemcgowan/Herd/sql/desktop/src-tauri/target/release/deps/libident_case-4e415623091776cf.rmeta: /Users/kylemcgowan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ident_case-1.0.1/src/lib.rs
+
+/Users/kylemcgowan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ident_case-1.0.1/src/lib.rs:
