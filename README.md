@@ -127,5 +127,4 @@ vendor/bin/pint --dirty --format agent
 ## Notes
 
 - The Laravel web app lives in the repository root.
-- The desktop rewrite is in `desktop/` and is separate from the Laravel install flow above.
 - If the UI looks stale after frontend changes, run `npm run build` or `npm run dev`.
